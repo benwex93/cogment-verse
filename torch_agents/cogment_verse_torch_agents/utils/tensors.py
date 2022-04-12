@@ -14,7 +14,7 @@
 
 import numpy as np
 import torch
-from data_pb2 import AgentAction
+from data_pb2 import AgentAction, ContinuousAction
 
 
 def tensor_from_cog_obs(cog_obs, device=None, dtype=torch.float):
@@ -28,6 +28,15 @@ def tensor_from_cog_action(cog_action, device=None, dtype=torch.long):
     return torch.tensor(cog_action.discrete_action, dtype=dtype, device=device)
 
 
+def tensor_from_cog_continuous_action(cog_action, device=None, dtype=torch.float):
+    return torch.tensor(cog_action.continuous_action.data, dtype=dtype, device=device)
+
 def cog_action_from_tensor(tensor):
     # TODO also support continuous actions and merge with wrapper.cog_action_from_torch_action
     return AgentAction(discrete_action=tensor.item())
+
+def cog_continuous_action_from_tensor(tensor):
+    return AgentAction(continuous_action=ContinuousAction(
+        data=tensor.tolist()))
+
+

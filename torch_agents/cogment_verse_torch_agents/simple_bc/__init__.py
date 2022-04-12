@@ -16,5 +16,9 @@ from cogment_verse_torch_agents.simple_bc.tutorial_1 import SimpleBCAgentAdapter
 from cogment_verse_torch_agents.simple_bc.tutorial_2 import SimpleBCAgentAdapterTutorialStep2
 from cogment_verse_torch_agents.simple_bc.tutorial_3 import SimpleBCAgentAdapterTutorialStep3
 from cogment_verse_torch_agents.simple_bc.tutorial_4 import SimpleBCAgentAdapterTutorialStep4
+from cogment_verse_torch_agents.simple_bc.dqn_agent import DQNAgent
+from cogment_verse_torch_agents.simple_bc.td3_agent import TD3Agent
 
-SimpleBCAgentAdapter = SimpleBCAgentAdapterTutorialStep4
+# SimpleBCAgentAdapter = SimpleBCAgentAdapterTutorialStep4
+# SimpleBCAgentAdapter = DQNAgent
+SimpleBCAgentAdapter = TD3Agent
