@@ -15,6 +15,7 @@
 import asyncio
 import copy
 import logging
+import random
 from collections import namedtuple
 
 import cogment
@@ -207,11 +208,13 @@ class TD3Agent(AgentAdapter):
                 reward = torch.tensor(sample.get_actor_reward(0), dtype=self._dtype)
                 done = torch.tensor(1.) if sample.get_trial_state() == TrialState.ENDED else torch.tensor(0.)
 
+
                 agent_action = sample.get_actor_action(0)
-                teacher_action = sample.get_actor_action(1)
+                #comment out for headless
+                #teacher_action = sample.get_actor_action(1)
 
 
-                print('3:', teacher_action)
+                # print('3:', teacher_action)
 
                 run_sample_producer_session.produce_training_sample((False, observation, action, reward, done))
                 
@@ -229,7 +232,7 @@ class TD3Agent(AgentAdapter):
             xp_tracker = MlflowExperimentTracker(run_session.params_name, run_session.run_id)
 
             config = run_session.config
-            assert config.environment.specs.num_players == 1
+            # assert config.environment.specs.num_players == 1
 
             xp_tracker.log_params(
                 config.training,
@@ -285,21 +288,25 @@ class TD3Agent(AgentAdapter):
             # Keep accumulated observations/actions around
             #observations = []
             #actions = []
-            rewards = []
-            #dones = []
+            episode_rewards = []
+            # dones = []
             buffer = ReplayBuffer(config.environment.specs.num_input, config.environment.specs.num_action)
 
             print('1: ', config.environment.specs.num_input)
             print('2: ', config.environment.specs.num_action)
             GAMMA = 0.99
             MAX_ACTION = 1.
-            TAU=0.005
-            POLICY_NOISE=0.2
+            TAU = 0.005
+            POLICY_NOISE = 0.2
             NOISE_CLIP = 0.5
-            POLICY_FREQ=2
+            POLICY_FREQ = 2
             
             def train_step():
-                # model.train_step+=1
+
+                # print('0', POLICY_FREQ)
+                # print('1', TOTAL_IT)
+                # global TOTAL_IT
+                # TOTAL_IT += 1
                 # Sample a batch of observations/actions
                 #batch_indices = np.random.default_rng().integers(0, len(observations), config.training.batch_size)
 
@@ -320,6 +327,7 @@ class TD3Agent(AgentAdapter):
                 model.actor.train()
 
 
+                # print('2')
                 with torch.no_grad():
                     #print('batch_obs', batch_obs)
                     #print('batch_obs type', batch_obs.dtype)
@@ -342,6 +350,7 @@ class TD3Agent(AgentAdapter):
                     target_Q = torch.min(target_Q1, target_Q2)
                     target_Q = batch_rew + (1. - batch_done) * GAMMA * target_Q
 
+                # print('3')
                 # Get current Q estimates
                 current_Q1, current_Q2 = model.critic(batch_obs, batch_act)
 
@@ -352,10 +361,12 @@ class TD3Agent(AgentAdapter):
                 model.critic_optimizer.zero_grad()
                 critic_loss.backward()
                 model.critic_optimizer.step()
+                # print('4')
 
                 # Delayed policy updates
-                # if model.train_step % POLICY_FREQ == 0:
-                if True:
+                # if TOTAL_IT % POLICY_FREQ == 0:
+                if random.randint(0, 1) == 0:
+                # if True:
 
                     # Compute actor losse
                     actor_loss = -model.critic.Q1(batch_obs, model.actor(batch_obs)).mean()
@@ -374,45 +385,8 @@ class TD3Agent(AgentAdapter):
 
                     return actor_loss.item()
 
+                # print('5')
                 return 0
-
-
-
-
-
-
-
-                # # pred_policy = model.actor(batch_obs)
-
-                # # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
-                # # columns of actions taken
-                # # print('batch_act: ', batch_act)
-                # # print('batch_act_shape: ', batch_act.shape)
-                # # print('1:', model.actor(batch_obs))
-                # # print('2:', model.actor(batch_obs).shape)
-
-                # state_action_values = model.actor(batch_obs).gather(1, batch_act.unsqueeze(0))
-                # # print('3:', state_action_values)
-                # # print('4:', state_action_values.shape)
-                # # print('5:', batch_obs.shape)
-                # # print('5:', batch_next_obs.shape)
-
-                # # Compute V(s_{t+1}) for all next states.
-                # next_state_values = model.actor(batch_next_obs)
-                # next_state_values = next_state_values.max(1)[0].detach()
-
-                # # Compute the expected Q values
-                # expected_state_action_values = ((1 - batch_done) * next_state_values * GAMMA) + batch_rew
-
-
-                # loss = F.smooth_l1_loss(state_action_values.squeeze(), expected_state_action_values)
-
-                # # Backprop!
-                # optimizer.zero_grad()
-                # loss.backward()
-                # optimizer.step()
-
-                # return loss.item()
 
             ##########################################
 
@@ -435,32 +409,28 @@ class TD3Agent(AgentAdapter):
                 # (demonstration, observation, action) = sample
                 # if not demonstration:
                 #     continue
-                print('observation',observation)
-                print('action',action)
-                print('reward',reward)
-                print('done',done)
+                # print('observation',observation)
+                # print('action',action)
+                # print('reward',reward)
+                # print('done',done)
 
 
                 if done:
                     action = torch.tensor([0., 0.])
 
-                    return
                 buffer.add(observation, action, reward, done)
 
                 #observations.append(observation)
                 #actions.append(action)
-                rewards.append(reward)
-                total_reward = 0
+                episode_rewards.append(reward)
+                # dones.append(done)
                 if done == 1:
-                    for prev_done, prev_rew in zip(reversed(dones),reversed(rewards)):
-                        if prev_done:
-                            break
-                        total_reward += prev_rew
+                    
 
-                    print('episode reward:' * 50)
-                    print('total_reward', total_reward)
+                    print('episode reward:' * 10)
+                    print('total_reward', sum(episode_rewards))
+                    episode_rewards.clear()
 
-                #dones.append(done)
 
                 if buffer.size < config.training.batch_size:
                     continue
@@ -476,7 +446,7 @@ class TD3Agent(AgentAdapter):
                         step_idx,
                         model_version_number=version_info["version_number"],
                         loss=loss,
-                        total_samples=len(buffer.state),
+                        total_samples=buffer.size,
                     )
                 ##########################################
 
