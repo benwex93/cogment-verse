@@ -124,7 +124,7 @@ class DQNAgent(AgentAdapter):
                 action = torch.distributions.Categorical(probs).sample()
                 return action
 
-            async for event in actor_session.event_loop():
+            async for event in actor_session.all_events():
                 if event.observation and event.type == cogment.EventType.ACTIVE:
                     action = await self.run_async(compute_action, event)
                     actor_session.do_action(cog_action_from_tensor(action))

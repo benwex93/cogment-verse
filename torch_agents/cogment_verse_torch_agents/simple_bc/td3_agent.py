@@ -179,7 +179,7 @@ class TD3Agent(AgentAdapter):
                     #print('action: ', action)
                     return action
 
-            async for event in actor_session.event_loop():
+            async for event in actor_session.all_events():
                 if event.observation and event.type == cogment.EventType.ACTIVE:
                     action = await self.run_async(compute_action, event)
                     actor_session.do_action(cog_continuous_action_from_tensor(action))
@@ -282,9 +282,9 @@ class TD3Agent(AgentAdapter):
                     run_id=run_session.run_id,
                     environment=env_params,
                     #headless
-                    # actors=[agent_actor_params],
+                    actors=[agent_actor_params],
                     #not headless
-                    actors=[agent_actor_params, teacher_actor_params],
+                    #actors=[agent_actor_params, teacher_actor_params],
                 )
 
             # Keep accumulated observations/actions around
