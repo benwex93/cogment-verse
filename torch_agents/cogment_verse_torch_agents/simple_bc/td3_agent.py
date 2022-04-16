@@ -392,6 +392,7 @@ class TD3Agent(AgentAdapter):
             ##########################################
 
             # Rollout a bunch of trials
+            num_trials = 0
             async for (
                 ############ TUTORIAL STEP 4 ############
                 step_idx,
@@ -419,10 +420,12 @@ class TD3Agent(AgentAdapter):
                 if done:
                     action = torch.tensor([0., 0.])
 
+                    num_trials += 1
                     xp_tracker.log_metrics(
                         step_timestamp,
                         step_idx,
                         total_reward=total_reward.item(),
+                        num_trials=num_trials
                     )
 
                 buffer.add(observation, action, reward, done)
