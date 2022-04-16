@@ -63,7 +63,7 @@ class Actor(torch.nn.Module):
         self.l1 = torch.nn.Linear(state_dim, 256)
         self.l2 = torch.nn.Linear(256, 256)
         self.l3 = torch.nn.Linear(256, action_dim)
-        
+
     def forward(self, state):
         a = F.relu(self.l1(state))
         a = F.relu(self.l2(a))
@@ -194,6 +194,7 @@ class TD3Agent(AgentAdapter):
             #removed for headless
             # assert run_sample_producer_session.count_actors() == 2
 
+            total_reward = 0
             async for sample in run_sample_producer_session.get_all_samples():
                 # if sample.get_trial_state() == TrialState.ENDED:
                 #     break
@@ -206,6 +207,7 @@ class TD3Agent(AgentAdapter):
                 #print('2:', action)
 
                 reward = torch.tensor(sample.get_actor_reward(0), dtype=self._dtype)
+                total_reward += reward
                 done = torch.tensor(1.) if sample.get_trial_state() == TrialState.ENDED else torch.tensor(0.)
 
 
@@ -216,8 +218,8 @@ class TD3Agent(AgentAdapter):
 
                 # print('3:', teacher_action)
 
-                run_sample_producer_session.produce_training_sample((False, observation, action, reward, done))
-                
+                run_sample_producer_session.produce_training_sample((False, observation, action, reward, total_reward, done))
+
                 # Check for teacher override.
                 # Teacher action -1 corresponds to teacher approval,
                 # i.e. the teacher considers the action taken by the agent to be correct
@@ -288,7 +290,6 @@ class TD3Agent(AgentAdapter):
             # Keep accumulated observations/actions around
             #observations = []
             #actions = []
-            episode_rewards = []
             # dones = []
             buffer = ReplayBuffer(config.environment.specs.num_input, config.environment.specs.num_action)
 
@@ -300,7 +301,7 @@ class TD3Agent(AgentAdapter):
             POLICY_NOISE = 0.2
             NOISE_CLIP = 0.5
             POLICY_FREQ = 2
-            
+
             def train_step():
 
                 # print('0', POLICY_FREQ)
@@ -340,7 +341,7 @@ class TD3Agent(AgentAdapter):
                     noise = (
                         torch.randn_like(batch_act) * POLICY_NOISE
                     ).clamp(-NOISE_CLIP, NOISE_CLIP)
-                    
+
                     batch_next_act = (
                         model.actor_target(batch_next_obs) + noise
                     ).clamp(-MAX_ACTION, MAX_ACTION)
@@ -370,8 +371,8 @@ class TD3Agent(AgentAdapter):
 
                     # Compute actor losse
                     actor_loss = -model.critic.Q1(batch_obs, model.actor(batch_obs)).mean()
-                    
-                    # Optimize the actor 
+
+                    # Optimize the actor
                     model.actor_optimizer.zero_grad()
                     actor_loss.backward()
                     model.actor_optimizer.step()
@@ -404,7 +405,7 @@ class TD3Agent(AgentAdapter):
                 max_parallel_trials=config.training.max_parallel_trials,
             ):
                 ############ TUTORIAL STEP 4 ############
-                (_demonstration, observation, action, reward, done) = sample
+                (_demonstration, observation, action, reward, total_reward, done) = sample
                 # Can be uncommented to only use samples coming from the teacher
                 # (demonstration, observation, action) = sample
                 # if not demonstration:
@@ -418,20 +419,17 @@ class TD3Agent(AgentAdapter):
                 if done:
                     action = torch.tensor([0., 0.])
 
+                    xp_tracker.log_metrics(
+                        step_timestamp,
+                        step_idx,
+                        total_reward=total_reward.item(),
+                    )
+
                 buffer.add(observation, action, reward, done)
 
                 #observations.append(observation)
                 #actions.append(action)
-                episode_rewards.append(reward)
                 # dones.append(done)
-                if done == 1:
-                    
-
-                    print('episode reward:' * 10)
-                    print('total_reward', sum(episode_rewards))
-                    episode_rewards.clear()
-
-
                 if buffer.size < config.training.batch_size:
                     continue
 
