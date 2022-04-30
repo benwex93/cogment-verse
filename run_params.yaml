@@ -908,6 +908,23 @@ simple_bc_lander: &simple_bc_experiment
     policy_network:
       hidden_size: 64
 
+#TD3 with human intervention
+td3_lander: 
+  implementation: simple_bc_training
+  config:
+    class_name: data_pb2.SimpleBCTrainingRunConfig
+    environment:
+      specs: *lander_continuous_specs
+      config:
+        seed: 12
+    training:
+      trial_count: 1000000
+      max_parallel_trials: 1
+      learning_rate: 0.001
+      batch_size: 32
+    policy_network:
+      hidden_size: 64
+
 simple_bc_cartpole:
   <<: *simple_bc_experiment
   implementation: simple_bc_training

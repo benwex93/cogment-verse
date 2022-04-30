@@ -15,20 +15,22 @@
 import asyncio
 import copy
 import logging
-
-############ TUTORIAL STEP 3 ############
 from collections import namedtuple
 
-##########################################
-
 import cogment
+
+############ TUTORIAL STEP 4 ############
+import numpy as np
+
+##########################################
 import torch
 from cogment.api.common_pb2 import TrialState
 from cogment_verse import AgentAdapter, MlflowExperimentTracker
 from cogment_verse.constants import HUMAN_ACTOR_NAME, HUMAN_ACTOR_CLASS, HUMAN_ACTOR_IMPL
-
-############ TUTORIAL STEP 3 ############
-from cogment_verse_torch_agents.utils.tensors import cog_action_from_tensor, tensor_from_cog_action, tensor_from_cog_obs
+from cogment_verse_torch_agents.utils.tensors import cog_action_from_tensor, \
+                                                        tensor_from_cog_continuous_action, tensor_from_cog_action, \
+                                                        cog_continuous_action_from_tensor, tensor_from_cog_obs
+from cogment_verse_torch_agents.utils.buffer import ReplayBuffer
 from cogment_verse.spaces import flattened_dimensions
 from data_pb2 import (
     ActorParams,
@@ -38,20 +40,68 @@ from data_pb2 import (
     HumanConfig,
     HumanRole,
     MLPNetworkConfig,
+    ############ TUTORIAL STEP 4 ############
+    SimpleBCTrainingConfig,
+    ##########################################
     SimpleBCTrainingRunConfig,
     TrialConfig,
 )
 
-##########################################
-
-############ TUTORIAL STEP 3 ############
 SimpleBCModel = namedtuple("SimpleBCModel", ["model_id", "version_number", "policy_network"])
-##########################################
 
 log = logging.getLogger(__name__)
 
+class Actor(torch.nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(Actor, self).__init__()
+
+        self.l1 = torch.nn.Linear(state_dim, 256)
+        self.l2 = torch.nn.Linear(256, 256)
+        self.l3 = torch.nn.Linear(256, action_dim)
+
+    def forward(self, state):
+        a = F.relu(self.l1(state))
+        a = F.relu(self.l2(a))
+        return torch.tanh(self.l3(a))
+
+class Critic(torch.nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(Critic, self).__init__()
+
+        # Q1 architecture
+        self.l1 = torch.nn.Linear(state_dim + action_dim, 256)
+        self.l2 = torch.nn.Linear(256, 256)
+        self.l3 = torch.nn.Linear(256, 1)
+
+        # Q2 architecture
+        self.l4 = torch.nn.Linear(state_dim + action_dim, 256)
+        self.l5 = torch.nn.Linear(256, 256)
+        self.l6 = torch.nn.Linear(256, 1)
+
+
+    def forward(self, state, action):
+        sa = torch.cat([state, action], 1)
+
+        q1 = F.relu(self.l1(sa))
+        q1 = F.relu(self.l2(q1))
+        q1 = self.l3(q1)
+
+        q2 = F.relu(self.l4(sa))
+        q2 = F.relu(self.l5(q2))
+        q2 = self.l6(q2)
+        return q1, q2
+
+
+    def Q1(self, state, action):
+        sa = torch.cat([state, action], 1)
+
+        q1 = F.relu(self.l1(sa))
+        q1 = F.relu(self.l2(q1))
+        q1 = self.l3(q1)
+        return q1
+
 # pylint: disable=arguments-differ
-class SimpleBCAgentAdapterTutorialStep3(AgentAdapter):
+class TD3Agent2(AgentAdapter):
     def __init__(self):
         super().__init__()
         self._dtype = torch.float
@@ -62,7 +112,6 @@ class SimpleBCAgentAdapterTutorialStep3(AgentAdapter):
         all_events = asyncio.get_running_loop()
         return await all_events.run_in_executor(None, func, *args)
 
-    ############ TUTORIAL STEP 3 ############
     def _create(
         self,
         model_id,
@@ -73,18 +122,17 @@ class SimpleBCAgentAdapterTutorialStep3(AgentAdapter):
         num_input = flattened_dimensions(environment_specs.observation_space)
         num_output = flattened_dimensions(environment_specs.action_space)
 
+        policy_network=Actor(num_input, num_output)
+        value_network=Critic(num_input, num_output)
         model = SimpleBCModel(
             model_id=model_id,
             version_number=1,
-            policy_network=torch.nn.Sequential(
-                torch.nn.Linear(num_input, policy_network_hidden_size),
-                torch.nn.BatchNorm1d(policy_network_hidden_size),
-                torch.nn.ReLU(),
-                torch.nn.Linear(policy_network_hidden_size, policy_network_hidden_size),
-                torch.nn.BatchNorm1d(policy_network_hidden_size),
-                torch.nn.ReLU(),
-                torch.nn.Linear(policy_network_hidden_size, num_output),
-            ).to(self._dtype),
+            actor=policy_network,
+            actor_target=copy.deepcopy(policy_network),
+            actor_optimizer=torch.optim.Adam(policy_network.parameters(), lr=3e-4),
+            critic=value_network,
+            critic_target=copy.deepcopy(value_network),
+            critic_optimizer=torch.optim.Adam(value_network.parameters(), lr=3e-4),
         )
 
         model_user_data = {
@@ -105,15 +153,12 @@ class SimpleBCAgentAdapterTutorialStep3(AgentAdapter):
         torch.save(model.policy_network, model_data_f)
         return {}
 
-    ##########################################
-
     def _create_actor_implementations(self):
         async def impl(actor_session):
             actor_session.start()
 
             config = actor_session.config
 
-            ############ TUTORIAL STEP 3 ############
             model, _model_info, version_info = await self.retrieve_version(config.model_id, config.model_version)
             model_version_number = version_info["version_number"]
             log.info(f"Starting trial with model v{model_version_number}")
@@ -124,17 +169,15 @@ class SimpleBCAgentAdapterTutorialStep3(AgentAdapter):
 
             @torch.no_grad()
             def compute_action(event):
-                obs = tensor_from_cog_obs(event.observation.snapshot, dtype=self._dtype)
-                scores = policy_network(obs.view(1, -1))
-                probs = torch.softmax(scores, dim=-1)
-                action = torch.distributions.Categorical(probs).sample()
-                return action
+                with torch.no_grad():
+                    obs = tensor_from_cog_obs(event.observation.snapshot, dtype=self._dtype)
+                    action = policy_network(obs.view(1, -1)).squeeze()
+                    return action
 
             async for event in actor_session.all_events():
                 if event.observation and event.type == cogment.EventType.ACTIVE:
                     action = await self.run_async(compute_action, event)
                     actor_session.do_action(cog_action_from_tensor(action))
-            ##########################################
 
         return {
             "simple_bc": (impl, ["agent"]),
@@ -142,7 +185,6 @@ class SimpleBCAgentAdapterTutorialStep3(AgentAdapter):
 
     def _create_run_implementations(self):
         async def sample_producer_impl(run_sample_producer_session):
-            assert run_sample_producer_session.count_actors() == 2
 
             async for sample in run_sample_producer_session.get_all_samples():
                 if sample.get_trial_state() == TrialState.ENDED:
@@ -176,16 +218,14 @@ class SimpleBCAgentAdapterTutorialStep3(AgentAdapter):
                 policy_network_hidden_size=config.policy_network.hidden_size,
             )
 
-            ############ TUTORIAL STEP 3 ############
             model_id = f"{run_session.run_id}_model"
 
             # Initializing a model
-            _model, _version_info = await self.create_and_publish_initial_version(
+            model, _version_info = await self.create_and_publish_initial_version(
                 model_id,
                 environment_specs=config.environment.specs,
                 policy_network_hidden_size=config.policy_network.hidden_size,
             )
-            ##########################################
 
             # Helper function to create a trial configuration
             def create_trial_config(trial_idx):
@@ -197,10 +237,8 @@ class SimpleBCAgentAdapterTutorialStep3(AgentAdapter):
                     implementation="simple_bc",
                     agent_config=AgentConfig(
                         run_id=run_session.run_id,
-                        ############ TUTORIAL STEP 3 ############
                         model_id=model_id,
                         model_version=-1,
-                        ##########################################
                         environment_specs=env_params.specs,
                     ),
                 )
@@ -221,10 +259,44 @@ class SimpleBCAgentAdapterTutorialStep3(AgentAdapter):
                     actors=[agent_actor_params, teacher_actor_params],
                 )
 
+            ############ TUTORIAL STEP 4 ############
+            # Configure the optimizer
+            optimizer = torch.optim.Adam(
+                model.policy_network.parameters(),
+                lr=config.training.learning_rate,
+            )
+
+            # Keep accumulated observations/actions around
+            observations = []
+            actions = []
+
+            loss_fn = torch.nn.CrossEntropyLoss()
+
+            def train_step():
+                # Sample a batch of observations/actions
+                batch_indices = np.random.default_rng().integers(0, len(observations), config.training.batch_size)
+                batch_obs = torch.vstack([observations[i] for i in batch_indices])
+                batch_act = torch.vstack([actions[i] for i in batch_indices]).view(-1)
+
+                model.policy_network.train()
+                pred_policy = model.policy_network(batch_obs)
+                loss = loss_fn(pred_policy, batch_act)
+
+                # Backprop!
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                return loss.item()
+
+            ##########################################
+
             # Rollout a bunch of trials
             async for (
-                _step_idx,
-                _step_timestamp,
+                ############ TUTORIAL STEP 4 ############
+                step_idx,
+                step_timestamp,
+                ##########################################
                 _trial_id,
                 _tick_id,
                 sample,
@@ -232,7 +304,32 @@ class SimpleBCAgentAdapterTutorialStep3(AgentAdapter):
                 trial_configs=[create_trial_config(trial_idx) for trial_idx in range(config.training.trial_count)],
                 max_parallel_trials=config.training.max_parallel_trials,
             ):
-                log.info(f"Got sample {sample}")
+                ############ TUTORIAL STEP 4 ############
+                (_demonstration, observation, action) = sample
+                # Can be uncommented to only use samples coming from the teacher
+                # (demonstration, observation, action) = sample
+                # if not demonstration:
+                #     continue
+                observations.append(observation)
+                actions.append(action)
+
+                if len(observations) < config.training.batch_size:
+                    continue
+
+                loss = await self.run_async(train_step)
+
+                # Publish the newly trained version every 100 steps
+                if step_idx % 100 == 0:
+                    version_info = await self.publish_version(model_id, model)
+
+                    xp_tracker.log_metrics(
+                        step_timestamp,
+                        step_idx,
+                        model_version_number=version_info["version_number"],
+                        loss=loss,
+                        total_samples=len(observations),
+                    )
+                ##########################################
 
         return {
             "simple_bc_training": (
@@ -240,12 +337,18 @@ class SimpleBCAgentAdapterTutorialStep3(AgentAdapter):
                 run_impl,
                 SimpleBCTrainingRunConfig(
                     environment=EnvironmentParams(
-                        specs=None,  # Needs to be specified
+                        specs=None,  # Needs to be specified,
                         config=EnvironmentConfig(seed=12, framestack=1, render=True, render_width=256),
                     ),
-                    ############ TUTORIAL STEP 3 ############
-                    policy_network=MLPNetworkConfig(hidden_size=64),
+                    ############ TUTORIAL STEP 4 ############
+                    training=SimpleBCTrainingConfig(
+                        trial_count=100,
+                        max_parallel_trials=1,
+                        discount_factor=0.95,
+                        learning_rate=0.01,
+                    ),
                     ##########################################
+                    policy_network=MLPNetworkConfig(hidden_size=64),
                 ),
             )
         }
