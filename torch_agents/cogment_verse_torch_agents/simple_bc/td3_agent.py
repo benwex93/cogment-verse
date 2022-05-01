@@ -238,34 +238,60 @@ class TD3Agent(AgentAdapter):
     def _create_run_implementations(self):
         async def sample_producer_impl(run_sample_producer_session):
 
-            #removed for headless
+            # removed for headless
             # assert run_sample_producer_session.count_actors() == 2
 
+            observation = None
+            next_observation = None
+            action = None
+            reward = None
             total_reward = 0
+
             async for sample in run_sample_producer_session.get_all_samples():
                 # if sample.get_trial_state() == TrialState.ENDED:
                 #     break
 
-                observation = tensor_from_cog_obs(sample.get_actor_observation(0), dtype=self._dtype)
+                next_observation = tensor_from_cog_obs(
+                    sample.get_actor_observation(0), dtype=self._dtype
+                )
 
-                #print('1:', sample.get_actor_action(0))
-                action=tensor_from_cog_continuous_action(sample.get_actor_action(0))
+                if observation is not None:
+                    done = sample.get_trial_state() == TrialState.ENDED
 
-                #print('2:', action)
+                    run_sample_producer_session.produce_training_sample(
+                        (
+                            False,
+                            observation,
+                            next_observation,
+                            action,
+                            reward,
+                            total_reward,
+                            torch.tensor(1.0) if done else torch.tensor(0.0),
+                        )
+                    )
+
+                    if done:
+                        break
+
+                # print('1:', sample.get_actor_action(0))
+                agent_action = tensor_from_cog_continuous_action(
+                    sample.get_actor_action(0)
+                )
+                # teacher_action = sample.get_actor_action(1)
+                action = agent_action
+
+                # print('2:', action)
 
                 reward = torch.tensor(sample.get_actor_reward(0), dtype=self._dtype)
                 total_reward += reward
-                done = torch.tensor(1.) if sample.get_trial_state() == TrialState.ENDED else torch.tensor(0.)
 
-
-                agent_action = sample.get_actor_action(0)
-                #comment out for headless
-                #teacher_action = sample.get_actor_action(1)
-
+                # agent_action = sample.get_actor_action(0)
+                # comment out for headless
+                #
 
                 # print('3:', teacher_action)
 
-                run_sample_producer_session.produce_training_sample((False, observation, action, reward, total_reward, done))
+                observation = next_observation
 
                 # Check for teacher override.
                 # Teacher action -1 corresponds to teacher approval,
@@ -452,7 +478,15 @@ class TD3Agent(AgentAdapter):
                 max_parallel_trials=config.training.max_parallel_trials,
             ):
                 ############ TUTORIAL STEP 4 ############
-                (_demonstration, observation, action, reward, total_reward, done) = sample
+                (
+                    _demonstration,
+                    observation,
+                    next_observation,
+                    action,
+                    reward,
+                    total_reward,
+                    done,
+                ) = sample
                 # Can be uncommented to only use samples coming from the teacher
                 # (demonstration, observation, action) = sample
                 # if not demonstration:
@@ -479,6 +513,7 @@ class TD3Agent(AgentAdapter):
                         num_trials=num_trials
                     )
                 else:
+                    # TODO do soemthing with next_observation
                     buffer.add(observation, action, reward, done)
 
                 #observations.append(observation)
