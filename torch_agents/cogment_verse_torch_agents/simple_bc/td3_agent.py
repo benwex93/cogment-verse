@@ -124,7 +124,6 @@ class TD3Agent(AgentAdapter):
         self,
         model_id,
         environment_specs,
-        policy_network_hidden_size=64,
         **kwargs,
     ):
         num_input = flattened_dimensions(environment_specs.observation_space)
@@ -135,7 +134,7 @@ class TD3Agent(AgentAdapter):
         value_network=Critic(num_input, num_output)
         model = SimpleBCModel(
             model_id=model_id,
-            version_number=1,
+            version_number=-1,
             actor=policy_network,
             actor_target=copy.deepcopy(policy_network),
             actor_optimizer=torch.optim.Adam(policy_network.parameters(), lr=3e-4),
@@ -153,13 +152,45 @@ class TD3Agent(AgentAdapter):
         return model, model_user_data
 
     def _load(self, model_id, version_number, model_user_data, version_user_data, model_data_f, **kwargs):
-        policy_network = torch.load(model_data_f)
-        assert isinstance(policy_network, torch.nn.Sequential)
-        return SimpleBCModel(model_id=model_id, version_number=version_number, policy_network=policy_network)
+        print('loading'*200)
+        checkpoint = torch.load(model_data_f)
+        
+        actor = checkpoint['actor']
+        actor_target = checkpoint['actor_target']
+        actor_optimizer = checkpoint['actor_optimizer']
+        critic = checkpoint['critic']
+        critic_target = checkpoint['critic_target']
+        critic_optimizer = checkpoint['critic_optimizer']
+
+        assert isinstance(actor, torch.nn.Sequential)
+        assert isinstance(actor_target, torch.nn.Sequential)
+        assert isinstance(actor_optimizer, torch.optim)
+        assert isinstance(critic, torch.nn.Sequential)
+        assert isinstance(critic_target, torch.nn.Sequential)
+        assert isinstance(critic_optimizer, torch.optim)
+        loaded_model = SimpleBCModel(
+            model_id=model_id,
+            version_number=version_number,
+            actor=actor,
+            actor_target=actor_target,
+            actor_optimizer=actor_optimizer,
+            critic=critic,
+            critic_target=critic_target,
+            critic_optimizer=critic_optimizer,
+        )
+        return loaded_model
 
     def _save(self, model, model_user_data, model_data_f, **kwargs):
+        print('saving')
         assert isinstance(model, SimpleBCModel)
-        torch.save(model.actor, model_data_f)
+        torch.save({
+            'actor': model.actor.state_dict(),
+            'actor_target': model.actor_target.state_dict(),
+            'actor_optimizer': model.actor_optimizer.state_dict(),
+            'critic': model.critic.state_dict(),
+            'critic_target': model.critic_target.state_dict(),
+            'critic_optimizer': model.critic_optimizer.state_dict(),
+            }, model_data_f)
         return {}
 
     def _create_actor_implementations(self):
@@ -177,7 +208,7 @@ class TD3Agent(AgentAdapter):
             policy_network.eval()
 
             EXPL_NOISE = 0.1
-            MAX_ACTION = 1
+            MAX_ACTION = 1.
             ACTION_SIZE = 2
 
             @torch.no_grad()
@@ -186,11 +217,12 @@ class TD3Agent(AgentAdapter):
                     # action = torch.zeros(2)
                     obs = tensor_from_cog_obs(event.observation.snapshot, dtype=self._dtype)
                     action = policy_network(obs.view(1, -1)).squeeze()
-                    # print('action: ', action)
+                    # print('action taken1: ', action)
                     # else:
                     action = \
                         (action + np.random.normal(0, MAX_ACTION * EXPL_NOISE, size=ACTION_SIZE)
                     ).clip(-MAX_ACTION, MAX_ACTION)
+                    # print('action taken2: ', action)
 
                     return action
 
@@ -251,12 +283,12 @@ class TD3Agent(AgentAdapter):
             config = run_session.config
             # assert config.environment.specs.num_players == 1
 
-            xp_tracker.log_params(
-                config.training,
-                config.environment.config,
-                environment=config.environment.specs.implementation,
-                policy_network_hidden_size=config.policy_network.hidden_size,
-            )
+            # xp_tracker.log_params(
+            #     config.training,
+            #     config.environment.config,
+            #     environment=config.environment.specs.implementation,
+            #     policy_network_hidden_size=config.policy_network.hidden_size,
+            # )
 
             model_id = f"{run_session.run_id}_model"
 
@@ -264,7 +296,6 @@ class TD3Agent(AgentAdapter):
             model, _version_info = await self.create_and_publish_initial_version(
                 model_id,
                 environment_specs=config.environment.specs,
-                policy_network_hidden_size=config.policy_network.hidden_size,
             )
 
             # Helper function to create a trial configuration
@@ -334,7 +365,14 @@ class TD3Agent(AgentAdapter):
 
                 batch_obs, batch_act, batch_next_obs, batch_rew, batch_not_done = buffer.sample(BATCH_SIZE)
 
+                # print('batch_obs',batch_obs)
+                # print('batch_act',batch_act)
+                # print('batch_next_obs',batch_next_obs)
+                # print('batch_rew',batch_rew)
+                # print('batch_not_done',batch_not_done)
+
                 model.actor.train()
+                model.critic.train()
 
                 with torch.no_grad():
 
@@ -373,7 +411,7 @@ class TD3Agent(AgentAdapter):
                 # print('POLICY_FREQ',POLICY_FREQ)
                 # print('START_ACTOR_UPDATE',START_ACTOR_UPDATE)
                 if step_idx % POLICY_FREQ == 0 and step_idx > START_ACTOR_UPDATE:
-                    # print('here')
+                    # print('here', step_idx)
                 # if True:
 
                     # Compute actor losse
@@ -393,11 +431,7 @@ class TD3Agent(AgentAdapter):
 
                     q_avg = actor_loss.item()
 
-                    print('batch_obs',batch_obs)
-                    print('batch_act',batch_act)
-                    print('batch_next_obs',batch_next_obs)
-                    print('batch_rew',batch_rew)
-                    print('batch_not_done',batch_not_done)
+
 
                 return (critic_loss.item(), q_avg)
 
@@ -431,7 +465,7 @@ class TD3Agent(AgentAdapter):
 
 
                 if done:
-                    action = torch.tensor([0., 0.])
+                    # action = torch.tensor([0., 0.])
 
                     print('num_trials', num_trials)
                     print('total_reward', total_reward)
@@ -444,8 +478,8 @@ class TD3Agent(AgentAdapter):
                         total_reward=total_reward.item(),
                         num_trials=num_trials
                     )
-
-                buffer.add(observation, action, reward, done)
+                else:
+                    buffer.add(observation, action, reward, done)
 
                 #observations.append(observation)
                 #actions.append(action)
