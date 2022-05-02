@@ -205,6 +205,8 @@ class TD3Agent(AgentAdapter):
 
             # Retrieve the policy network and set it to "eval" mode
             policy_network = model.actor
+            
+            # print('2:',model.version_number)
             policy_network.eval()
 
             EXPL_NOISE = 0.1
@@ -257,7 +259,10 @@ class TD3Agent(AgentAdapter):
 
                 if observation is not None:
                     done = sample.get_trial_state() == TrialState.ENDED
-
+                    # if done:
+                    #     print('action',action)
+                    #     print('reward',reward)
+                    #     print('here' *200)
                     run_sample_producer_session.produce_training_sample(
                         (
                             False,
@@ -292,6 +297,7 @@ class TD3Agent(AgentAdapter):
                 # print('3:', teacher_action)
 
                 observation = next_observation
+
 
                 # Check for teacher override.
                 # Teacher action -1 corresponds to teacher approval,
@@ -400,6 +406,7 @@ class TD3Agent(AgentAdapter):
                 model.actor.train()
                 model.critic.train()
 
+                # print('1:',model.version_number)
                 with torch.no_grad():
 
                     noise = (
@@ -491,15 +498,9 @@ class TD3Agent(AgentAdapter):
                 # (demonstration, observation, action) = sample
                 # if not demonstration:
                 #     continue
-                # print('observation',observation)
-                # print('action',action)
-                # print('reward',reward)
-                # print('done',done)
-                # print('step',step_idx)
 
 
                 if done:
-                    # action = torch.tensor([0., 0.])
 
                     print('num_trials', num_trials)
                     print('total_reward', total_reward)
@@ -512,9 +513,8 @@ class TD3Agent(AgentAdapter):
                         total_reward=total_reward.item(),
                         num_trials=num_trials
                     )
-                else:
-                    # TODO do soemthing with next_observation
-                    buffer.add(observation, action, reward, done)
+                # TODO do soemthing with next_observation
+                buffer.add(observation, action, next_observation, reward, done)
 
                 #observations.append(observation)
                 #actions.append(action)
@@ -525,33 +525,33 @@ class TD3Agent(AgentAdapter):
                 critic_loss, actor_loss = await self.run_async(train_step, (step_idx))
 
                 # Publish the newly trained version every 100 steps
-                if step_idx % 100 == 0:
-                    version_info = await self.publish_version(model_id, model)
+                # if step_idx % 100 == 0:
+                version_info = await self.publish_version(model_id, model)
 
-                    if critic_loss is None:
-                        xp_tracker.log_metrics(
-                            step_timestamp,
-                            step_idx,
-                            model_version_number=version_info["version_number"],
-                            total_samples=buffer.size,
-                        )
-                    elif actor_loss is None:
-                        xp_tracker.log_metrics(
-                            step_timestamp,
-                            step_idx,
-                            model_version_number=version_info["version_number"],
-                            critic_loss=critic_loss,
-                            total_samples=buffer.size,
-                        )
-                    else:
-                        xp_tracker.log_metrics(
-                            step_timestamp,
-                            step_idx,
-                            model_version_number=version_info["version_number"],
-                            critic_loss=critic_loss,
-                            actor_loss=actor_loss,
-                            total_samples=buffer.size,
-                        )
+                if critic_loss is None:
+                    xp_tracker.log_metrics(
+                        step_timestamp,
+                        step_idx,
+                        model_version_number=version_info["version_number"],
+                        total_samples=buffer.size,
+                    )
+                elif actor_loss is None:
+                    xp_tracker.log_metrics(
+                        step_timestamp,
+                        step_idx,
+                        model_version_number=version_info["version_number"],
+                        critic_loss=critic_loss,
+                        total_samples=buffer.size,
+                    )
+                else:
+                    xp_tracker.log_metrics(
+                        step_timestamp,
+                        step_idx,
+                        model_version_number=version_info["version_number"],
+                        critic_loss=critic_loss,
+                        actor_loss=actor_loss,
+                        total_samples=buffer.size,
+                    )
                 ##########################################
 
         return {
@@ -563,15 +563,15 @@ class TD3Agent(AgentAdapter):
                         specs=None,  # Needs to be specified,
                         config=EnvironmentConfig(seed=12, framestack=1, render=True, render_width=256),
                     ),
-                    ############ TUTORIAL STEP 4 ############
-                    training=SimpleBCTrainingConfig(
-                        trial_count=100,
-                        max_parallel_trials=1,
-                        discount_factor=0.95,
-                        learning_rate=0.01,
-                    ),
-                    ##########################################
-                    policy_network=MLPNetworkConfig(hidden_size=64),
+                    # ############ TUTORIAL STEP 4 ############
+                    # training=SimpleBCTrainingConfig(
+                    #     trial_count=100,
+                    #     max_parallel_trials=1,
+                    #     discount_factor=0.95,
+                    #     learning_rate=0.01,
+                    # ),
+                    # ##########################################
+                    # policy_network=MLPNetworkConfig(hidden_size=64),
                 ),
             )
         }
