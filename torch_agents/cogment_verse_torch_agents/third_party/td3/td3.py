@@ -55,6 +55,7 @@ class TD3Agent(Agent):
         )
 
         # TODO fix this high variable
+        device = torch.device("cpu")
         self._actor = ActorMLP(obs_dim, act_dim).to(device)
         self._actor_target = copy.deepcopy(self._actor)
         self._actor_optimizer = torch.optim.Adam(self._actor.parameters(), lr=3e-4)
@@ -75,7 +76,8 @@ class TD3Agent(Agent):
         self._params["discount_rate"] = discount_rate
         self._params["tau"] = target_net_update_fraction
 
-        self._device = torch.device(device)  # pylint: disable=no-member
+        # self._device = torch.device(device)  # pylint: disable=no-member
+        self._device = torch.device("cpu")
         self._loss_fn = torch.nn.SmoothL1Loss()
 
         self._target_net_update_schedule = PeriodicSchedule(off_value=False, on_value=True, period=100)
@@ -115,7 +117,7 @@ class TD3Agent(Agent):
         if self._params["total_it"] < self._params["start_timesteps"] or self._rng.random() < epsilon:
             uniform_action = torch.rand(self._params["act_dim"])
             span = self._params["max_action"] - self._params["min_action"]
-            action = uniform_action * span + self._params["min_action"]
+            action = uniform_action.to(self._device) * span.to(self._device) + self._params["min_action"].to(self._device)
         else:
             span = self._params["max_action"] - self._params["min_action"]
             center = span * 0.5

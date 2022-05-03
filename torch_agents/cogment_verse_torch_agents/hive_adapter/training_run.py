@@ -126,11 +126,13 @@ def create_training_run(agent_adapter):
                         environment_specs=config.environment.specs,
                     ),
                 )
-                for player_idx in range(config.environment.specs.num_players)
+                # for player_idx in range(config.environment.specs.num_players)
+                for player_idx in range(1)
             ]
             # for self-play, randomly select one player to use latest model version
             # if there is only one player then it will always use the latest
-            distinguished_actor = np.random.randint(0, config.environment.specs.num_players)
+            # distinguished_actor = np.random.randint(0, config.environment.specs.num_players)
+            distinguished_actor = 0
             player_actor_configs[distinguished_actor].agent_config.model_version = -1
 
             self_play_trial_configs = [
@@ -242,7 +244,7 @@ def create_training_run(agent_adapter):
                 nonlocal trials_completed
                 nonlocal all_trials_reward
                 nonlocal start_time
-
+                print("trial configs = ", trial_configs)
                 async for (
                     step_idx,
                     step_timestamp,
@@ -251,8 +253,8 @@ def create_training_run(agent_adapter):
                     sample,
                 ) in run_session.start_trials_and_wait_for_termination(
                     trial_configs=trial_configs,
-                    max_parallel_trials=max_parallel_trials,
-                    on_progress=create_progress_logger(run_session.params_name, run_id, config.total_trial_count),
+                    max_parallel_trials=1
+                    # on_progress=create_progress_logger(run_session.params_name, run_id, config.total_trial_count),
                 ):
                     if sample.trial_total_reward is not None:
                         # This is a sample from a end of a trial
