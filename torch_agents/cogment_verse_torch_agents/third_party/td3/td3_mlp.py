@@ -12,13 +12,18 @@ class ActorMLP(nn.Module):
 
     def __init__(self, in_dim, out_dim, hidden_units=256, num_hidden_layers=1):
         super().__init__()
-        self.input_layer = nn.Sequential(nn.Linear(np.prod(in_dim), hidden_units), nn.ReLU())
+        self.device = torch.device("cpu")
+        self.input_layer = nn.Sequential(nn.Linear(np.prod(in_dim), hidden_units), nn.ReLU()).to(self.device)
         self.hidden_layers = nn.Sequential(
             *[nn.Sequential(nn.Linear(hidden_units, hidden_units), nn.ReLU()) for _ in range(num_hidden_layers)]
         )
         self.output_layer = nn.Linear(hidden_units, out_dim)
 
+
     def forward(self, x, low, high):
+        x = x.to(self.device)
+        low = low.to(self.device)
+        high = high.to(self.device)
         x = torch.flatten(x, start_dim=1)
         x = self.input_layer(x)
         x = self.hidden_layers(x)
@@ -38,8 +43,11 @@ class CriticMLP(nn.Module):
         self.l4 = nn.Linear(in_dim + out_dim, 256)
         self.l5 = nn.Linear(256, 256)
         self.l6 = nn.Linear(256, 1)
+        self.device = torch.device("cpu")
 
     def forward(self, state, action):
+        state = state.to(self.device)
+        action = action.to(self.device)
         sa = torch.cat([state, action], 1)
 
         q1 = F.relu(self.l1(sa))
@@ -52,6 +60,8 @@ class CriticMLP(nn.Module):
         return q1, q2
 
     def Q1(self, state, action):
+        state = state.to(self.device)
+        action = action.to(self.device)
         sa = torch.cat([state, action], 1)
 
         q1 = F.relu(self.l1(sa))
