@@ -36,7 +36,6 @@ def cog_action_from_tensor(tensor):
     return AgentAction(discrete_action=tensor.item())
 
 def cog_continuous_action_from_tensor(tensor):
-    return AgentAction(continuous_action=ContinuousAction(
-        data=tensor.tolist()))
+    return AgentAction(continuous_action=ContinuousAction(data=tensor.tolist()))
 
 

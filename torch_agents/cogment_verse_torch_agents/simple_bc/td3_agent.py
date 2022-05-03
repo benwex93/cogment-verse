@@ -36,6 +36,8 @@ from cogment_verse_torch_agents.utils.tensors import cog_action_from_tensor, \
 from cogment_verse_torch_agents.utils.buffer import ReplayBuffer
 from cogment_verse.spaces import flattened_dimensions
 
+from gym import spaces
+
 from data_pb2 import (
     ActorParams,
     AgentConfig,
@@ -107,6 +109,14 @@ class Critic(torch.nn.Module):
         q1 = self.l3(q1)
         return q1
 
+global_actor=Actor(8, 2)
+global_actor_target=copy.deepcopy(global_actor)
+global_actor_optimizer=torch.optim.Adam(global_actor.parameters(), lr=3e-4)
+global_critic=Critic(8, 2)
+global_critic_target=copy.deepcopy(global_critic)
+global_critic_optimizer=torch.optim.Adam(global_critic.parameters(), lr=3e-4)
+
+actor_steps = 0
 # pylint: disable=arguments-differ
 class TD3Agent(AgentAdapter):
     def __init__(self):
@@ -181,7 +191,7 @@ class TD3Agent(AgentAdapter):
         return loaded_model
 
     def _save(self, model, model_user_data, model_data_f, **kwargs):
-        print('saving')
+        # print('saving')
         assert isinstance(model, SimpleBCModel)
         torch.save({
             'actor': model.actor.state_dict(),
@@ -194,6 +204,7 @@ class TD3Agent(AgentAdapter):
         return {}
 
     def _create_actor_implementations(self):
+
         async def impl(actor_session):
             actor_session.start()
 
@@ -205,22 +216,45 @@ class TD3Agent(AgentAdapter):
 
             # Retrieve the policy network and set it to "eval" mode
             policy_network = model.actor
-            
+
+
+
+
             # print('2:',model.version_number)
             policy_network.eval()
 
             EXPL_NOISE = 0.1
             MAX_ACTION = 1.
             ACTION_SIZE = 2
+            START_TIMESTEPS = 25000
 
             @torch.no_grad()
-            def compute_action(event):
+            def compute_action(event, actor_steps):
+                #################
+                global global_actor
+                policy_network = global_actor
+                ##################
+
+                # print('actor_steps',actor_steps)
+                
+                if actor_steps > START_TIMESTEPS:
+                    action_space = spaces.Box(-1, +1, (2,), dtype=np.float32)
+                    action = action_space.sample()
+                    return action
+                
+
                 with torch.no_grad():
                     # action = torch.zeros(2)
+                    # print('0',dir(event))
+                    # print('1',dir(event.observation))
+                    # print('2',event.observation)
+                    # print('3',event.observation.snapshot)
                     obs = tensor_from_cog_obs(event.observation.snapshot, dtype=self._dtype)
-                    action = policy_network(obs.view(1, -1)).squeeze()
-                    # print('action taken1: ', action)
-                    # else:
+                    # print('4',obs)
+                    action = policy_network(obs).squeeze()
+                    # print('MAX_ACTION ', MAX_ACTION)
+                    # print('obs taken2: ', obs.view(1, -1))
+                    # # else:
                     action = \
                         (action + np.random.normal(0, MAX_ACTION * EXPL_NOISE, size=ACTION_SIZE)
                     ).clip(-MAX_ACTION, MAX_ACTION)
@@ -229,8 +263,10 @@ class TD3Agent(AgentAdapter):
                     return action
 
             async for event in actor_session.all_events():
+                global actor_steps
+                actor_steps += 1
                 if event.observation and event.type == cogment.EventType.ACTIVE:
-                    action = await self.run_async(compute_action, event)
+                    action = await self.run_async(compute_action, event, actor_steps)
                     actor_session.do_action(cog_continuous_action_from_tensor(action))
 
         return {
@@ -386,13 +422,12 @@ class TD3Agent(AgentAdapter):
             # START_CRITIC_UPDATE = 25000
             # START_ACTOR_UPDATE = 25000
 
-            START_CRITIC_UPDATE = 0
-            START_ACTOR_UPDATE = 0
+            START_UPDATE = 25000
             BATCH_SIZE = 256
 
             def train_step(step_idx):
 
-                if step_idx < START_CRITIC_UPDATE:
+                if step_idx < START_UPDATE:
                     return None, None
 
                 batch_obs, batch_act, batch_next_obs, batch_rew, batch_not_done = buffer.sample(BATCH_SIZE)
@@ -402,6 +437,26 @@ class TD3Agent(AgentAdapter):
                 # print('batch_next_obs',batch_next_obs)
                 # print('batch_rew',batch_rew)
                 # print('batch_not_done',batch_not_done)
+
+
+                ##################
+                global global_actor
+                global global_actor_target
+                global global_actor_optimizer
+                global global_critic
+                global global_critic_target
+                global global_critic_optimizer
+                model = SimpleBCModel(
+                    model_id=1,
+                    version_number=1,
+                    actor=global_actor,
+                    actor_target=global_actor_target,
+                    actor_optimizer=global_actor_optimizer,
+                    critic=global_critic,
+                    critic_target=global_critic_target,
+                    critic_optimizer=global_critic_optimizer,
+                )
+                ##########################
 
                 model.actor.train()
                 model.critic.train()
@@ -443,7 +498,7 @@ class TD3Agent(AgentAdapter):
                 # print('step_idx',step_idx)
                 # print('POLICY_FREQ',POLICY_FREQ)
                 # print('START_ACTOR_UPDATE',START_ACTOR_UPDATE)
-                if step_idx % POLICY_FREQ == 0 and step_idx > START_ACTOR_UPDATE:
+                if step_idx % POLICY_FREQ == 0:
                     # print('here', step_idx)
                 # if True:
 
@@ -514,8 +569,8 @@ class TD3Agent(AgentAdapter):
                         num_trials=num_trials
                     )
                 # TODO do soemthing with next_observation
+                # print ('size', buffer.size)
                 buffer.add(observation, action, next_observation, reward, done)
-
                 #observations.append(observation)
                 #actions.append(action)
                 # dones.append(done)
@@ -527,6 +582,7 @@ class TD3Agent(AgentAdapter):
                 # Publish the newly trained version every 100 steps
                 # if step_idx % 100 == 0:
                 version_info = await self.publish_version(model_id, model)
+                # print('3:',model.version_number)
 
                 if critic_loss is None:
                     xp_tracker.log_metrics(
